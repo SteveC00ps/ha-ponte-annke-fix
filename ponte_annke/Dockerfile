@@ -1,21 +1,18 @@
 ARG BUILD_FROM
+ARG GO2RTC_IMAGE=alexxit/go2rtc:1.9.14
+
+# go2rtc preso dall'immagine Docker ufficiale (multi-architettura),
+# cosi non serve scaricare file da GitHub durante la costruzione
+FROM ${GO2RTC_IMAGE} AS go2rtc
+
 FROM ${BUILD_FROM}
 
-ARG BUILD_ARCH
-ARG GO2RTC_VERSION
-
-# Node.js 22 (WebSocket integrato) per il ponte; go2rtc ripubblica il video in RTSP
+# Node.js 22 (WebSocket integrato) per il ponte
 RUN apk add --no-cache nodejs jq \
- && case "${BUILD_ARCH}" in \
-      aarch64) G2=go2rtc_linux_arm64 ;; \
-      amd64)   G2=go2rtc_linux_amd64 ;; \
-      *) echo "Architettura non supportata: ${BUILD_ARCH}"; exit 1 ;; \
-    esac \
- && curl -fsSL -o /usr/local/bin/go2rtc "https://github.com/AlexxIT/go2rtc/releases/download/${GO2RTC_VERSION}/${G2}" \
- && chmod +x /usr/local/bin/go2rtc \
  && node --version
 
+COPY --from=go2rtc /usr/local/bin/go2rtc /usr/local/bin/go2rtc
 COPY rootfs /
-RUN chmod +x /run.sh
+RUN chmod +x /run.sh /usr/local/bin/go2rtc
 
 CMD [ "/run.sh" ]

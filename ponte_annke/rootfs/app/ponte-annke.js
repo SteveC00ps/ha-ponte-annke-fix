@@ -40,6 +40,66 @@ try {
   log('ATTENZIONE: config.json mancante o non valido (' + e.message + '), uso i valori predefiniti');
 }
 
+// ---------- riassemblaggio dei fotogrammi grandi ----------
+// The NVR sends each frame as IOT DATA messages carrying at most 64 KB of
+// payload. Frames larger than that (high-resolution keyframes) continue in
+// further DATA messages that do not start with a frame header. import.js
+// treats every message as a complete frame, so it silently drops those
+// continuation chunks and keyframes arrive cut off at ~64 KB (grey picture
+// below the cut). This wraps WebSocket so the library receives each frame
+// whole: continuation payloads are appended to the frame in progress, which
+// is handed over when the next frame header arrives.
+function installReassembler() {
+  const Native = globalThis.WebSocket;
+  const IOT_HDR = 32;                   // iot hdr_len
+  const DATA = 19, DATA_PRIOR = 43;     // IOT_LINK_CMD_DATA, IOT_LINK_CMD_DATA_PRIOR
+  const FRAM = 0x4652414d, FRAN = 0x4652414e; // PROC_FRAME_MAGIC, PROC_FRAME_MAGIC2
+  const LE = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+
+  class ReassemblingWebSocket extends Native {
+    addEventListener(type, fn, opts) {
+      if (type !== 'message') return super.addEventListener(type, fn, opts);
+      let pend = null;                  // { hdr, chunks, size, parts }
+      const flush = () => {
+        if (!pend) return;
+        const p = pend;
+        pend = null;
+        const out = new Uint8Array(IOT_HDR + p.size);
+        out.set(p.hdr, 0);
+        let off = IOT_HDR;
+        for (const c of p.chunks) { out.set(c, off); off += c.length; }
+        new DataView(out.buffer).setUint32(28, p.size, true); // payload_len
+        if (p.parts > 1) reassembled++;
+        fn.call(this, { type: 'message', target: this, data: out.buffer });
+      };
+      return super.addEventListener('message', (ev) => {
+        const d = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : null;
+        if (d && d.length > IOT_HDR) {
+          const cmd = LE(d, 4);
+          if (cmd === DATA || cmd === DATA_PRIOR) {
+            const pl = d.subarray(IOT_HDR);
+            const magic = pl.length >= 4 ? LE(pl, 0) : 0;
+            if (magic === FRAM || magic === FRAN) {          // start of a new frame
+              flush();
+              pend = { hdr: d.slice(0, IOT_HDR), chunks: [pl.slice()], size: pl.length, parts: 1 };
+              return;
+            }
+            if (pend && magic !== 0x4b503250) {                // continuation (not an API reply)
+              pend.chunks.push(pl.slice());
+              pend.size += pl.length;
+              pend.parts++;
+              return;
+            }
+          }
+        }
+        fn.call(this, ev);                                    // everything else unchanged
+      }, opts);
+    }
+  }
+  globalThis.WebSocket = ReassemblingWebSocket;
+}
+let reassembled = 0;
+
 // ---------- libreria dell'NVR ----------
 async function loadLib() {
   const local = path.join(DIR, 'import.js');
@@ -63,6 +123,7 @@ async function loadLib() {
   if (typeof WebSocket === 'undefined') {
     throw new Error('serve Node.js 22 o piu recente (WebSocket integrato)');
   }
+  installReassembler();
 
   // Ambiente minimo da browser richiesto dalla libreria
   const noop = () => {};
@@ -166,7 +227,7 @@ async function loadLib() {
     setTimeout(() => {
       const s = (Date.now() - t0) / 1000;
       if (frames > 0) {
-        log(`PROVA RIUSCITA: ${frames} fotogrammi, ${(bytes / 1024).toFixed(0)} KB in ${s.toFixed(1)} s`);
+        log(`PROVA RIUSCITA: ${frames} fotogrammi, ${(bytes / 1024).toFixed(0)} KB in ${s.toFixed(1)} s, ${reassembled} fotogrammi riassemblati`);
         shutdown(0);
       } else {
         log('PROVA FALLITA: nessun fotogramma video ricevuto');

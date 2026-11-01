@@ -1,8 +1,8 @@
-name: Ponte Annke
-version: "1.0.1"
-slug: ponte_annke
+name: Ponte Annke Fix
+version: "1.0.2"
+slug: ponte_annke_fix
 description: Telecamere dell'NVR wireless Annke (Annke Sight / JuanVision) in RTSP per Home Assistant, tramite go2rtc
-url: https://github.com/gian883/ha-ponte-annke
+url: https://github.com/SteveC00ps/ha-ponte-annke-fix
 arch:
   - aarch64
   - amd64
